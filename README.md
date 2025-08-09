@@ -2,6 +2,64 @@
 
 Servicio REST que expone ejecución de comandos del sistema (stdin/stdout/stderr) con autenticación por Bearer basada en claves `ssh-ed25519` del archivo `/etc/ssh/authorized_keys`.
 
+## Instalación y uso con Homebrew
+
+La forma recomendada es vía Homebrew (macOS y Linux):
+
+```bash
+brew tap zk-armor/homebrew-tap
+brew install shellrest-go
+```
+
+Arrancar como servicio en segundo plano:
+
+```bash
+brew services start shellrest-go
+```
+
+Config por defecto: `$(brew --prefix)/etc/shellrest/sshrest.conf`
+
+Editar config y reiniciar el servicio:
+
+```bash
+$EDITOR "$(brew --prefix)/etc/shellrest/sshrest.conf"
+brew services restart shellrest-go
+```
+
+Derivar TOKEN desde el `authorized_keys` configurado (ejemplo):
+
+```bash
+AUTH_KEYS="$(brew --prefix)/etc/shellrest/sshrest.conf" # archivo de config
+AUTH_KEYS_PATH=$(grep '^SRG_AUTH_KEYS_PATH=' "$AUTH_KEYS" | cut -d= -f2)
+TOKEN=$(awk '$1=="ssh-ed25519"{print $2}' "$AUTH_KEYS_PATH" | head -n1 | base64 -d | \
+  openssl dgst -sha256 -binary | xxd -p -c 256)
+echo "TOKEN=$TOKEN"
+```
+
+Probar health y un comando:
+
+```bash
+curl -sS -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8080/healthz
+curl -sS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -X POST http://localhost:8080/api/v1/exec \
+  -d '{"cmd":"bash","args":["-lc","uname -a"],"timeout_seconds":15}' | jq .
+```
+
+Actualizar a la última versión:
+
+```bash
+brew update && brew upgrade shellrest-go
+```
+
+Detener servicio y desinstalar:
+
+```bash
+brew services stop shellrest-go
+brew uninstall shellrest-go
+```
+
+Referencia OpenAPI: [`api/openapi.yaml`](api/openapi.yaml)
+
 ## Auth
 
 - El header `Authorization: Bearer <TOKEN>` es obligatorio para `/api/v1/exec`.
