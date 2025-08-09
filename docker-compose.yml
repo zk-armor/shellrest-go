@@ -1,0 +1,23 @@
+services:
+  shellrest:
+    build: .
+    image: shellrest-go:latest
+    container_name: shellrest-go
+    ports:
+      - "8080:8080"
+    env_file:
+      - ./sshrest.conf
+    volumes:
+      # Authorized keys for Bearer auth derivation
+      - ./.test/auth/authorized_keys:/etc/ssh/authorized_keys:ro
+      # Optional: mount config file inside container for reference (app reads env)
+      - ./sshrest.conf:/etc/shellrest/sshrest.conf:ro
+    restart: unless-stopped
+    # runs as non-root per Dockerfile (USER 65532)
+
+# Usage:
+#   docker compose up -d --build
+#   docker compose logs -f
+#
+# Ensure .test/auth/authorized_keys exists with at least one ssh-ed25519 public key.
+# The app derives Bearer tokens from those keys.
