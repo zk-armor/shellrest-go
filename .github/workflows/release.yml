@@ -41,7 +41,13 @@ jobs:
           echo "Building ${OUT} (version ${VERSION})"
           go build -ldflags='-s -w' -o "${OUT}" .
           TAR="dist/${OUT}.tar.gz"
-          tar -czf "$TAR" "${OUT}" README.md sshrest.conf || tar -czf "$TAR" "${OUT}" README.md || tar -czf "$TAR" "${OUT}"
+          # include setup wizard script as 'sshrest-setup'
+          cp -f scripts/sshrest-setup.sh sshrest-setup || true
+          chmod +x sshrest-setup || true
+          tar -czf "$TAR" "${OUT}" sshrest-setup README.md sshrest.conf || \
+            tar -czf "$TAR" "${OUT}" sshrest-setup README.md || \
+            tar -czf "$TAR" "${OUT}" sshrest-setup || \
+            tar -czf "$TAR" "${OUT}"
           (cd dist && sha256sum "${OUT}.tar.gz" > "${OUT}.tar.gz.sha256")
 
       - name: Upload artifact
