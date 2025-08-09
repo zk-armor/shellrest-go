@@ -1,0 +1,322 @@
+openapi: 3.0.3
+info:
+  title: shellrest-go API
+  version: "0.1.2"
+  description: |
+    Async SSH-like REST API. All endpoints require Bearer auth derived from ssh-ed25519 public key.
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    post:
+      summary: Health check
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+  /api/v1/exec:
+    post:
+      summary: Execute a command with optional stdin (JSON body)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecRequest'
+      responses:
+        '200':
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecResponse'
+        '401':
+          description: Unauthorized
+  /api/v1/exec/pipe:
+    post:
+      summary: Execute a command and stream stdin from request body
+      description: |
+        Use when stdin size is large or unknown. Body is raw bytes for stdin.
+        Query parameters carry command and timeout.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: cmd
+          schema:
+            type: string
+          required: true
+        - in: query
+          name: arg
+          description: Repeated args
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+        - in: query
+          name: timeout_seconds
+          schema:
+            type: integer
+            minimum: 0
+          required: false
+      requestBody:
+        required: false
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecResponse'
+        '401':
+          description: Unauthorized
+  /api/v1/jobs/start:
+    post:
+      summary: Start an asynchronous job
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecRequest'
+      responses:
+        '200':
+          description: Job started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+  /api/v1/jobs/peek:
+    post:
+      summary: Peek job state and outputs (two-phase protocol)
+      description: Returns next_action indicating whether client should provide stdin, read stdout/stderr, or wait for exit.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                job_id:
+                  type: string
+                stdout_offset:
+                  type: integer
+                  minimum: 0
+                stderr_offset:
+                  type: integer
+                  minimum: 0
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobPeekResponse'
+  /api/v1/jobs/stdin:
+    post:
+      summary: Write to a job's stdin
+      description: Raw bytes written to stdin. Optional ?close=true to close stdin.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: job_id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: close
+          required: false
+          schema:
+            type: boolean
+      requestBody:
+        required: false
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Write result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  written:
+                    type: integer
+                  closed:
+                    type: boolean
+        '409':
+          description: Stdin already closed
+  /api/v1/jobs/logs:
+    post:
+      summary: Fetch incremental stdout/stderr segments for a job
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                job_id:
+                  type: string
+                stdout_offset:
+                  type: integer
+                stderr_offset:
+                  type: integer
+      responses:
+        '200':
+          description: Logs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobLogsResponse'
+  /api/v1/jobs/status:
+    post:
+      summary: Get terminal status of a job
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                job_id:
+                  type: string
+      responses:
+        '200':
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  done:
+                    type: boolean
+                  exit_code:
+                    type: integer
+  /api/v1/jobs/cancel:
+    post:
+      summary: Cancel a running job
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                job_id:
+                  type: string
+      responses:
+        '200':
+          description: Cancellation requested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  canceled:
+                    type: boolean
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: token
+  schemas:
+    ExecRequest:
+      type: object
+      properties:
+        cmd:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        stdin_b64:
+          type: string
+          description: Optional base64-encoded stdin content
+        timeout_seconds:
+          type: integer
+          minimum: 0
+      required: [cmd]
+    ExecResponse:
+      type: object
+      properties:
+        stdout:
+          type: string
+        stderr:
+          type: string
+        stdout_b64:
+          type: boolean
+        stderr_b64:
+          type: boolean
+        exit_code:
+          type: integer
+        timed_out:
+          type: boolean
+        duration_ms:
+          type: integer
+    JobPeekResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+        running:
+          type: boolean
+        done:
+          type: boolean
+        exit_code:
+          type: integer
+          nullable: true
+        stdout_len:
+          type: integer
+        stderr_len:
+          type: integer
+        stdin_open:
+          type: boolean
+        next_action:
+          type: string
+          enum: [await_stdin, read_stdout, read_stderr, await_exit]
+    JobLogsResponse:
+      type: object
+      properties:
+        stdout:
+          type: string
+          description: Chunk since provided offset
+        stderr:
+          type: string
+        stdout_offset:
+          type: integer
+        stderr_offset:
+          type: integer
