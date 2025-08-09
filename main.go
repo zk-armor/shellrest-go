@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"flag"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -245,9 +246,63 @@ type ExecResponse struct {
 }
 
 func main() {
-	listenAddr := getenv("SRG_LISTEN_ADDR", defaultListenAddr)
-	authPath := getenv("SRG_AUTH_KEYS_PATH", defaultAuthKeysPath)
-	defaultTimeout := getenvDuration("SRG_EXEC_TIMEOUT", defaultExecTimeout)
+    // Flags
+    flagListen := flag.String("listen", "", "listen address (e.g. :8080)")
+    flagAuth := flag.String("auth-keys", "", "path to authorized_keys file")
+    flagTimeout := flag.String("exec-timeout", "", "default exec timeout (e.g. 120s, 0s to disable)")
+    flagConfig := flag.String("config", "", "path to sshrest.conf (env-style)")
+    flagSetup := flag.Bool("setup", false, "write default config file and exit")
+    flagHelp := flag.Bool("help", false, "show help and exit")
+
+    flag.Usage = func() {
+        fmt.Fprintf(os.Stderr, "shellrest-go: Async SSH-like REST API server\n")
+        fmt.Fprintf(os.Stderr, "Usage: %s [flags]\n\n", os.Args[0])
+        fmt.Fprintf(os.Stderr, "Flags:\n")
+        flag.PrintDefaults()
+        fmt.Fprintf(os.Stderr, "\nEnvironment variables (overridden by flags):\n")
+        fmt.Fprintf(os.Stderr, "  SRG_LISTEN_ADDR     (default %s)\n", defaultListenAddr)
+        fmt.Fprintf(os.Stderr, "  SRG_AUTH_KEYS_PATH  (default %s)\n", defaultAuthKeysPath)
+        fmt.Fprintf(os.Stderr, "  SRG_EXEC_TIMEOUT    (default %s)\n", defaultExecTimeout)
+        fmt.Fprintf(os.Stderr, "Config file (env-style): %s (or --config)\n", defaultConfigPath())
+    }
+    flag.Parse()
+
+    if *flagHelp {
+        flag.Usage()
+        return
+    }
+
+    // Load config file before reading env
+    cfgPath := *flagConfig
+    if cfgPath == "" {
+        cfgPath = defaultConfigPath()
+    }
+    if _, err := os.Stat(cfgPath); err == nil {
+        _ = loadEnvFile(cfgPath)
+    } else if *flagSetup {
+        // ensure directory and write default config
+        dir := filepath.Dir(cfgPath)
+        _ = os.MkdirAll(dir, 0o755)
+        _ = os.WriteFile(cfgPath, []byte("# shellrest-go config\nSRG_LISTEN_ADDR=:8080\nSRG_AUTH_KEYS_PATH=/etc/ssh/authorized_keys\nSRG_EXEC_TIMEOUT=120s\n"), 0o644)
+        fmt.Printf("wrote default config at %s\n", cfgPath)
+        return
+    }
+    if *flagSetup {
+        // If config existed, just report path and exit
+        fmt.Printf("config present at %s\n", cfgPath)
+        return
+    }
+
+    listenAddr := getenv("SRG_LISTEN_ADDR", defaultListenAddr)
+    authPath := getenv("SRG_AUTH_KEYS_PATH", defaultAuthKeysPath)
+    defaultTimeout := getenvDuration("SRG_EXEC_TIMEOUT", defaultExecTimeout)
+
+    // Flags override env if provided
+    if *flagListen != "" { listenAddr = *flagListen }
+    if *flagAuth != "" { authPath = *flagAuth }
+    if *flagTimeout != "" {
+        if d, err := time.ParseDuration(*flagTimeout); err == nil { defaultTimeout = d }
+    }
 
 	validTokens, err := loadValidBearerTokens(authPath)
 	if err != nil {
@@ -970,6 +1025,44 @@ func logMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		log.Printf("%s %s %s from %s", r.Method, r.URL.Path, time.Since(start), r.RemoteAddr)
 	})
+}
+
+// loadEnvFile loads KEY=VALUE lines into the environment if the variable is not already set.
+// Lines beginning with # are comments. Blank lines are ignored.
+func loadEnvFile(path string) error {
+    f, err := os.Open(filepath.Clean(path))
+    if err != nil {
+        return err
+    }
+    defer f.Close()
+    s := bufio.NewScanner(f)
+    for s.Scan() {
+        line := strings.TrimSpace(s.Text())
+        if line == "" || strings.HasPrefix(line, "#") {
+            continue
+        }
+        eq := strings.IndexByte(line, '=')
+        if eq <= 0 { // require KEY=...
+            continue
+        }
+        key := strings.TrimSpace(line[:eq])
+        val := strings.TrimSpace(line[eq+1:])
+        if os.Getenv(key) == "" { // do not overwrite existing env
+            _ = os.Setenv(key, val)
+        }
+    }
+    return s.Err()
+}
+
+func defaultConfigPath() string {
+    if os.Geteuid() == 0 {
+        return "/etc/shellrest/sshrest.conf"
+    }
+    home, _ := os.UserHomeDir()
+    if home == "" {
+        return "./sshrest.conf"
+    }
+    return filepath.Join(home, ".config", "shellrest", "sshrest.conf")
 }
 
 func getenv(key, def string) string {
